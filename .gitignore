@@ -1,0 +1,15 @@
+.env
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.idea/
+.vscode/
+.pytest_cache/
+.mypy_cache/
+.DS_Store
+*.log
+check_token.py
+check_tokens.py
+secret.txt
