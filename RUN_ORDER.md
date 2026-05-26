@@ -127,7 +127,7 @@ python db/create_tables.py
 Необязательно для запуска, но полезно перед сдачей:
 
 ```bash
-flake8 .
+python -m flake8 app config.py main.py db/create_tables.py
 ```
 
 ---
