@@ -1,218 +1,286 @@
 """Основная логика VK-бота."""
 
+from datetime import date
+
 from app.repository import Repository
 from app.vk_client import VkClient
 
 
 class VkBot:
-    """Бот для поиска людей во ВКонтакте."""
+    """Бот для поиска анкет VK."""
 
     def __init__(self):
         self.vk = VkClient()
         self.repository = Repository()
-        self.states = {}
-        self.search_results = {}
+
+        self.candidates = {}
+        self.candidate_position = {}
         self.current_candidate = {}
 
     def run(self):
-        """Запускает бота."""
+        """Запустить бота."""
         print("Bot started...")
+
         for event in self.vk.listen():
-            self.handle_message(event.user_id, event.text.strip())
+            text = event.text.strip()
+            self.handle_message(event.user_id, text)
 
     def handle_message(self, user_id, text):
-        """Обрабатывает входящее сообщение."""
-        text_lower = text.lower()
-        bot_user_id = self._prepare_bot_user(user_id)
+        """Обработать сообщение пользователя."""
+        command = text.lower()
+        bot_user_id = self._get_bot_user_id(user_id)
 
-        if text_lower in {"привет", "начать", "старт", "новый поиск"}:
-            self._start_search(user_id)
-        elif user_id in self.states:
-            self._process_search_state(user_id, text)
-        elif text_lower == "следующий":
+        if command in {"привет", "начать", "старт", "новый поиск"}:
+            self._start_search(user_id, bot_user_id)
+        elif command == "следующий":
             self._show_next_candidate(user_id, bot_user_id)
-        elif text_lower == "в избранное":
-            self._add_current_to_favorites(user_id, bot_user_id)
-        elif text_lower in {"в черный список", "в чёрный список"}:
-            self._add_current_to_blacklist(user_id, bot_user_id)
-        elif text_lower == "избранное":
+        elif command == "в избранное":
+            self._add_to_favorites(user_id, bot_user_id)
+        elif command in {"в черный список", "в чёрный список"}:
+            self._add_to_blacklist(user_id, bot_user_id)
+        elif command == "избранное":
             self._show_favorites(user_id, bot_user_id)
-        elif text_lower == "помощь":
+        elif command == "помощь":
             self._send_help(user_id)
         else:
             self.vk.send_message(
                 user_id,
-                "Я не понял команду. Напишите 'Привет'.",
+                "Я не понял команду. Напишите 'Привет' для начала поиска.",
             )
 
-    def _prepare_bot_user(self, user_id):
-        """Создаёт пользователя бота в БД."""
+    def _get_bot_user_id(self, user_id):
+        """Создать или получить пользователя бота из БД."""
         user_info = self.vk.get_user_info(user_id)
+
         return self.repository.get_or_create_bot_user(
             user_id,
             user_info.get("first_name", ""),
             user_info.get("last_name", ""),
         )
 
-    def _start_search(self, user_id):
-        """Начинает новый поиск."""
-        self.states[user_id] = {"step": "age_from"}
-        self.search_results[user_id] = []
-        self.current_candidate[user_id] = None
-        self.vk.send_message(user_id, "Введите минимальный возраст, например: 18")
+    def _start_search(self, user_id, bot_user_id):
+        """Начать новый поиск кандидатов."""
+        user_info = self.vk.get_user_info(user_id)
+        settings = self._make_search_settings(user_info)
 
-    def _process_search_state(self, user_id, text):
-        """Заполняет параметры поиска по шагам."""
-        state = self.states[user_id]
-        step = state["step"]
-
-        if step == "age_from":
-            if not text.isdigit():
-                self.vk.send_message(user_id, "Возраст нужно ввести числом.")
-                return
-            state["age_from"] = int(text)
-            state["step"] = "age_to"
+        if settings is None:
             self.vk.send_message(
                 user_id,
-                "Введите максимальный возраст, например: 35",
+                "Не удалось определить параметры поиска.\n"
+                "Проверьте, что в профиле VK открыты город, пол "
+                "и дата рождения с годом.",
             )
+            return
 
-        elif step == "age_to":
-            if not text.isdigit():
-                self.vk.send_message(user_id, "Возраст нужно ввести числом.")
-                return
-            state["age_to"] = int(text)
-            state["step"] = "sex"
-            self.vk.send_message(user_id, "Введите пол: 1 — женщина, 2 — мужчина")
-
-        elif step == "sex":
-            if text not in {"1", "2"}:
-                self.vk.send_message(user_id, "Введите только 1 или 2.")
-                return
-            state["sex"] = int(text)
-            state["step"] = "city_id"
-            self.vk.send_message(
-                user_id,
-                "Введите ID города VK. Москва — 1, Санкт-Петербург — 2.",
-            )
-
-        elif step == "city_id":
-            if not text.isdigit():
-                self.vk.send_message(user_id, "ID города нужно ввести числом.")
-                return
-            state["city_id"] = int(text)
-            self._finish_search_settings(user_id, state)
-
-    def _finish_search_settings(self, user_id, state):
-        """Сохраняет параметры и запускает поиск."""
         self.repository.update_search_settings(
             vk_user_id=user_id,
-            age_from=state["age_from"],
-            age_to=state["age_to"],
-            sex=state["sex"],
-            city_id=state["city_id"],
-        )
-        del self.states[user_id]
-
-        candidates = self.vk.search_candidates(
-            age_from=state["age_from"],
-            age_to=state["age_to"],
-            sex=state["sex"],
-            city_id=state["city_id"],
+            age_from=settings["age_from"],
+            age_to=settings["age_to"],
+            sex=settings["sex"],
+            city_id=settings["city_id"],
         )
 
-        self.search_results[user_id] = candidates
+        found_candidates = self.vk.search_candidates(
+            age_from=settings["age_from"],
+            age_to=settings["age_to"],
+            sex=settings["sex"],
+            city_id=settings["city_id"],
+        )
+
+        self.candidates[user_id] = found_candidates
+        self.candidate_position[user_id] = 0
+        self.current_candidate[user_id] = None
+
         self.vk.send_message(
             user_id,
-            "Поиск выполнен. Показываю первого кандидата.",
+            "Параметры поиска определены автоматически:\n"
+            f"возраст от {settings['age_from']} до {settings['age_to']}, "
+            f"город ID {settings['city_id']}.\n"
+            "Ищу подходящего кандидата.",
         )
-        bot_user_id = self._prepare_bot_user(user_id)
+
         self._show_next_candidate(user_id, bot_user_id)
 
-    def _show_next_candidate(self, user_id, bot_user_id):
-        """Показывает следующего подходящего кандидата."""
-        candidates = self.search_results.get(user_id, [])
+    def _make_search_settings(self, user_info):
+        """Сформировать параметры поиска из профиля пользователя."""
+        user_age = self._get_age(user_info.get("bdate"))
+        user_sex = user_info.get("sex")
+        city = user_info.get("city") or {}
+        city_id = city.get("id")
 
-        while candidates:
-            candidate = candidates.pop(0)
+        if not user_age or not city_id or user_sex not in (1, 2):
+            return None
+
+        search_sex = 1 if user_sex == 2 else 2
+
+        return {
+            "age_from": max(user_age - 5, 18),
+            "age_to": user_age + 5,
+            "sex": search_sex,
+            "city_id": city_id,
+        }
+
+    @staticmethod
+    def _get_age(bdate):
+        """Посчитать возраст по дате рождения из VK."""
+        if not bdate:
+            return None
+
+        parts = bdate.split(".")
+
+        if len(parts) != 3:
+            return None
+
+        day, month, year = parts
+
+        if not day.isdigit() or not month.isdigit() or not year.isdigit():
+            return None
+
+        birthday = date(int(year), int(month), int(day))
+        today = date.today()
+        age = today.year - birthday.year
+
+        if (today.month, today.day) < (birthday.month, birthday.day):
+            age -= 1
+
+        return age
+
+    def _show_next_candidate(self, user_id, bot_user_id):
+        """Показать следующего кандидата."""
+        candidates = self.candidates.get(user_id, [])
+        position = self.candidate_position.get(user_id, 0)
+
+        while position < len(candidates):
+            candidate = candidates[position]
+            self.candidate_position[user_id] = position + 1
+            position += 1
+
+            if candidate["id"] == user_id:
+                continue
+
             candidate_id = self.repository.save_candidate(candidate)
 
-            if self.repository.is_hidden_candidate(bot_user_id, candidate_id):
+            if self.repository.is_blacklisted(bot_user_id, candidate_id):
+                continue
+
+            if self.repository.is_viewed(bot_user_id, candidate_id):
                 continue
 
             photos = self.vk.get_top_photos(candidate["id"])
+
             self.repository.save_photos(candidate_id, photos)
             self.repository.add_to_viewed(bot_user_id, candidate_id)
+
             self.current_candidate[user_id] = {
                 "candidate_id": candidate_id,
                 "candidate": candidate,
                 "photos": photos,
             }
+
             self._send_candidate(user_id, candidate, photos)
             return
 
         self.vk.send_message(
             user_id,
-            "Кандидаты закончились. Нажмите 'Новый поиск'.",
+            "Кандидаты закончились. Напишите 'Новый поиск'.",
         )
 
     def _send_candidate(self, user_id, candidate, photos):
-        """Отправляет карточку кандидата в чат."""
+        """Отправить кандидата пользователю."""
         profile_url = f"https://vk.com/id{candidate['id']}"
-        message = (
+        full_name = (
             f"{candidate.get('first_name', '')} "
-            f"{candidate.get('last_name', '')}\n"
-            f"Профиль: {profile_url}"
+            f"{candidate.get('last_name', '')}"
         )
+        message = f"{full_name}\nПрофиль: {profile_url}"
         attachments = [photo["attachment"] for photo in photos]
+
         self.vk.send_message(user_id, message, attachments)
 
-    def _add_current_to_favorites(self, user_id, bot_user_id):
-        """Добавляет текущего кандидата в избранное."""
+    def _add_to_favorites(self, user_id, bot_user_id):
+        """Добавить текущего кандидата в избранное."""
         current = self.current_candidate.get(user_id)
-        if not current:
+
+        if current is None:
             self.vk.send_message(user_id, "Сначала нужно показать кандидата.")
             return
 
-        self.repository.add_to_favorites(bot_user_id, current["candidate_id"])
+        candidate_id = current["candidate_id"]
+
+        if self.repository.is_blacklisted(bot_user_id, candidate_id):
+            self.vk.send_message(
+                user_id,
+                "Этот кандидат уже в чёрном списке.",
+            )
+            return
+
+        if self.repository.is_favorite(bot_user_id, candidate_id):
+            self.vk.send_message(
+                user_id,
+                "Этот кандидат уже есть в избранном.",
+            )
+            return
+
+        self.repository.add_to_favorites(bot_user_id, candidate_id)
         self.vk.send_message(user_id, "Кандидат добавлен в избранное.")
 
-    def _add_current_to_blacklist(self, user_id, bot_user_id):
-        """Добавляет текущего кандидата в чёрный список."""
+    def _add_to_blacklist(self, user_id, bot_user_id):
+        """Добавить текущего кандидата в чёрный список."""
         current = self.current_candidate.get(user_id)
-        if not current:
+
+        if current is None:
             self.vk.send_message(user_id, "Сначала нужно показать кандидата.")
             return
 
-        self.repository.add_to_blacklist(bot_user_id, current["candidate_id"])
+        candidate_id = current["candidate_id"]
+
+        if self.repository.is_blacklisted(bot_user_id, candidate_id):
+            self.vk.send_message(
+                user_id,
+                "Этот кандидат уже есть в чёрном списке.",
+            )
+            self._show_next_candidate(user_id, bot_user_id)
+            return
+
+        if self.repository.is_favorite(bot_user_id, candidate_id):
+            self.repository.remove_from_favorites(bot_user_id, candidate_id)
+            self.vk.send_message(
+                user_id,
+                "Кандидат был в избранном. "
+                "Я удалил его из избранного.",
+            )
+
+        self.repository.add_to_blacklist(bot_user_id, candidate_id)
         self.vk.send_message(user_id, "Кандидат добавлен в чёрный список.")
         self._show_next_candidate(user_id, bot_user_id)
 
     def _show_favorites(self, user_id, bot_user_id):
-        """Показывает список избранных кандидатов."""
+        """Показать список избранных кандидатов."""
         favorites = self.repository.get_favorites(bot_user_id)
+
         if not favorites:
             self.vk.send_message(user_id, "Список избранных пока пуст.")
             return
 
-        lines = ["Ваш список избранных:"]
+        text = "Ваш список избранных:\n"
+
         for item in favorites:
-            lines.append(
+            text += (
                 f"{item['first_name']} {item['last_name']} — "
-                f"{item['profile_url']}"
+                f"{item['profile_url']}\n"
             )
 
-        self.vk.send_message(user_id, "\n".join(lines))
+        self.vk.send_message(user_id, text)
 
     def _send_help(self, user_id):
-        """Отправляет справку по командам."""
+        """Отправить список команд."""
         self.vk.send_message(
             user_id,
-            "Команды бота:\n"
+            "Команды:\n"
             "Привет — начать поиск\n"
             "Следующий — показать следующего кандидата\n"
             "В избранное — сохранить кандидата\n"
             "Избранное — показать сохранённых\n"
             "В чёрный список — больше не показывать кандидата\n"
-            "Новый поиск — задать новые параметры",
+            "Новый поиск — начать поиск заново",
         )

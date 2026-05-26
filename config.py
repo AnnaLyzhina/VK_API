@@ -30,11 +30,14 @@ def check_required_settings():
         "DB_PASSWORD": DB_PASSWORD,
     }
 
-    empty_values = [name for name, value in required_values.items() if not value]
+    empty_values = [
+        name for name, value in required_values.items() if not value
+    ]
 
     if empty_values:
         missed = ", ".join(empty_values)
         raise ValueError(
             "Не заполнены обязательные значения в .env: "
-            f"{missed}. Проверьте файл .env."
+            f"{missed}. "
+            "Проверьте файл .env."
         )
