@@ -1,4 +1,4 @@
-"""Подключение к PostgreSQL без SQLAlchemy."""
+"""Подключение к PostgreSQL."""
 
 from pathlib import Path
 
