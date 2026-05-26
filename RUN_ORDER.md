@@ -71,9 +71,6 @@ python -m pip install --upgrade pip
 ```bash
 pip install -r requirements.txt
 ```
-
-В этом проекте нет SQLAlchemy, поэтому ошибок сборки SQLAlchemy быть не должно.
-
 ---
 
 ## 6. Создать файл .env
