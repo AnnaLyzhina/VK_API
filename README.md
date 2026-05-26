@@ -294,7 +294,7 @@ db/schema.sql
 ## Проверка PEP8
 
 ```bash
-flake8 .
+python -m flake8 app config.py main.py db/create_tables.py
 ```
 
 ---
