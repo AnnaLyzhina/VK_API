@@ -63,13 +63,12 @@ class VkClient:
         """Ищет кандидатов через users.search."""
         try:
             result = self.user_api.users.search(
-                count=20,
+                count=100,
                 offset=offset,
                 age_from=age_from,
                 age_to=age_to,
                 sex=sex,
                 city=city_id,
-                status=6,
                 has_photo=1,
                 fields="city,sex,bdate,is_closed,can_access_closed",
             )
